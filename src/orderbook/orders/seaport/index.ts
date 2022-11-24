@@ -150,8 +150,8 @@ export const save = async (
         });
       }
 
-      // Check: buy order has Weth as payment token
-      if (info.side === "buy" && info.paymentToken !== Sdk.Common.Addresses.Weth[config.chainId]) {
+      // Check: buy order has a supported payment token
+      if (info.side === "buy" && !getNetworkSettings().supportedBidCurrencies[info.paymentToken]) {
         return results.push({
           id,
           status: "unsupported-payment-token",
@@ -358,28 +358,32 @@ export const save = async (
       }));
 
       // Handle: royalties on top
+      const defaultRoyalties =
+        info.side === "sell"
+          ? await royalties.getRoyalties(info.contract, info.tokenId, "default")
+          : await royalties.getRoyaltiesByTokenSet(tokenSetId, "default");
+
+      const totalBuiltInBps = feeBreakdown
+        .map(({ bps, kind }) => (kind === "royalty" ? bps : 0))
+        .reduce((a, b) => a + b, 0);
+      const totalDefaultBps = defaultRoyalties.map(({ bps }) => bps).reduce((a, b) => a + b, 0);
+
       const missingRoyalties = [];
       let missingRoyaltyAmount = bn(0);
-      if (info.side === "sell") {
-        const defaultRoyalties = await royalties.getRoyalties(
-          info.contract,
-          info.tokenId,
-          "default"
+      if (totalBuiltInBps < totalDefaultBps) {
+        const validRecipients = defaultRoyalties.filter(
+          ({ bps, recipient }) => bps && recipient !== AddressZero
         );
-
-        const totalBuiltInBps = feeBreakdown
-          .map(({ bps, kind }) => (kind === "royalty" ? bps : 0))
-          .reduce((a, b) => a + b, 0);
-        const totalDefaultBps = defaultRoyalties.map(({ bps }) => bps).reduce((a, b) => a + b, 0);
-        if (totalBuiltInBps < totalDefaultBps) {
+        if (validRecipients.length) {
           const bpsDiff = totalDefaultBps - totalBuiltInBps;
           const amount = bn(price).mul(bpsDiff).div(10000).toString();
           missingRoyaltyAmount = missingRoyaltyAmount.add(amount);
 
           missingRoyalties.push({
+            bps: bpsDiff,
             amount,
             // TODO: We should probably split pro-rata across all royalty recipients
-            recipient: defaultRoyalties[0].recipient,
+            recipient: validRecipients[0].recipient,
           });
         }
       }
@@ -450,25 +454,20 @@ export const save = async (
       }
 
       // Handle: normalized value
-      let normalizedValue: string | undefined;
-      let currencyNormalizedValue: string | undefined;
-      if (info.side === "sell") {
-        currencyNormalizedValue = bn(currencyValue).add(missingRoyaltyAmount).toString();
+      const currencyNormalizedValue =
+        info.side === "sell"
+          ? bn(currencyValue).add(missingRoyaltyAmount).toString()
+          : bn(currencyValue).sub(missingRoyaltyAmount).toString();
 
-        const prices = await getUSDAndNativePrices(
-          currency,
-          currencyNormalizedValue.toString(),
-          currentTime
-        );
-        if (!prices.nativePrice) {
-          // Getting the native price is a must
-          return results.push({
-            id,
-            status: "failed-to-convert-price",
-          });
-        }
-        normalizedValue = bn(prices.nativePrice).toString();
+      const prices = await getUSDAndNativePrices(currency, currencyNormalizedValue, currentTime);
+      if (!prices.nativePrice) {
+        // Getting the native price is a must
+        return results.push({
+          id,
+          status: "failed-to-convert-price",
+        });
       }
+      const normalizedValue = bn(prices.nativePrice).toString();
 
       if (info.side === "buy" && order.params.kind === "single-token" && validateBidValue) {
         const typedInfo = info as typeof info & { tokenId: string };
@@ -537,8 +536,8 @@ export const save = async (
         raw_data: order.params,
         expiration: validTo,
         missing_royalties: missingRoyalties,
-        normalized_value: normalizedValue || null,
-        currency_normalized_value: currencyNormalizedValue || null,
+        normalized_value: normalizedValue,
+        currency_normalized_value: currencyNormalizedValue,
       });
 
       const unfillable =
@@ -644,6 +643,12 @@ export const save = async (
       }
 
       const collection = await getCollection(orderParams);
+      if (!collection) {
+        return results.push({
+          id,
+          status: "unknown-collection",
+        });
+      }
 
       // Check and save: associated token set
       let schemaHash = generateSchemaHash();
@@ -722,8 +727,8 @@ export const save = async (
               SELECT token_attributes.token_id
               FROM token_attributes
               WHERE token_attributes.collection_id = $/collection/
-              AND token_attributes.key = $/key/
-              AND token_attributes.value = $/value/
+                AND token_attributes.key = $/key/
+                AND token_attributes.value = $/value/
               ORDER BY token_attributes.token_id
             `,
             {
@@ -795,42 +800,33 @@ export const save = async (
       }
 
       // Handle: royalties on top
+      const defaultRoyalties =
+        orderParams.side === "sell"
+          ? await royalties.getRoyalties(orderParams.contract, orderParams.tokenId!, "default")
+          : await royalties.getRoyaltiesByTokenSet(tokenSetId, "default");
+
+      const totalBuiltInBps = feeBreakdown
+        .map(({ bps, kind }) => (kind === "royalty" ? bps : 0))
+        .reduce((a, b) => a + b, 0);
+      const totalDefaultBps = defaultRoyalties.map(({ bps }) => bps).reduce((a, b) => a + b, 0);
+
       const missingRoyalties = [];
       let missingRoyaltyAmount = bn(0);
-      if (orderParams.side === "sell") {
-        const defaultRoyalties = await royalties.getRoyalties(
-          orderParams.contract,
-          orderParams.tokenId!,
-          "default"
+      if (totalBuiltInBps < totalDefaultBps) {
+        const validRecipients = defaultRoyalties.filter(
+          ({ bps, recipient }) => bps && recipient !== AddressZero
         );
-        for (const { bps, recipient } of defaultRoyalties) {
-          // Get any built-in royalty payment to the current recipient
-          const existingRoyalty = feeBreakdown.find(
-            (r) => r.kind === "royalty" && r.recipient === recipient
-          );
+        if (validRecipients.length) {
+          const bpsDiff = totalDefaultBps - totalBuiltInBps;
+          const amount = bn(price).mul(bpsDiff).div(10000).toString();
+          missingRoyaltyAmount = missingRoyaltyAmount.add(amount);
 
-          if (existingRoyalty) {
-            // Charge the difference if the built-in royalty is less than the default
-            if (existingRoyalty.bps < bps) {
-              const actualBps = bps - existingRoyalty.bps;
-              const amount = bn(price).mul(actualBps).div(10000).toString();
-              missingRoyaltyAmount = missingRoyaltyAmount.add(amount);
-
-              missingRoyalties.push({
-                amount,
-                recipient,
-              });
-            }
-          } else {
-            // Charge the full amount if the built-in royalty is missing
-            const amount = bn(price).mul(bps).div(10000).toString();
-            missingRoyaltyAmount = missingRoyaltyAmount.add(amount);
-
-            missingRoyalties.push({
-              amount,
-              recipient,
-            });
-          }
+          missingRoyalties.push({
+            bps: bpsDiff,
+            amount,
+            // TODO: We should probably split pro-rata across all royalty recipients
+            recipient: validRecipients[0].recipient,
+          });
         }
       }
 
@@ -886,25 +882,20 @@ export const save = async (
       }
 
       // Handle: normalized value
-      let normalizedValue: string | undefined;
-      let currencyNormalizedValue: string | undefined;
-      if (orderParams.side === "sell") {
-        currencyNormalizedValue = bn(currencyValue).add(missingRoyaltyAmount).toString();
+      const currencyNormalizedValue =
+        orderParams.side === "sell"
+          ? bn(currencyValue).add(missingRoyaltyAmount).toString()
+          : bn(currencyValue).sub(missingRoyaltyAmount).toString();
 
-        const prices = await getUSDAndNativePrices(
-          currency,
-          currencyNormalizedValue.toString(),
-          currentTime
-        );
-        if (!prices.nativePrice) {
-          // Getting the native price is a must
-          return results.push({
-            id,
-            status: "failed-to-convert-price",
-          });
-        }
-        normalizedValue = bn(prices.nativePrice).toString();
+      const prices = await getUSDAndNativePrices(currency, currencyNormalizedValue, currentTime);
+      if (!prices.nativePrice) {
+        // Getting the native price is a must
+        return results.push({
+          id,
+          status: "failed-to-convert-price",
+        });
       }
+      const normalizedValue = bn(prices.nativePrice).toString();
 
       if (orderParams.side === "buy" && orderParams.kind === "single-token" && validateBidValue) {
         const tokenId = orderParams.tokenId;
@@ -972,8 +963,8 @@ export const save = async (
         raw_data: null,
         expiration: validTo,
         missing_royalties: missingRoyalties,
-        normalized_value: normalizedValue || null,
-        currency_normalized_value: currencyNormalizedValue || null,
+        normalized_value: normalizedValue,
+        currency_normalized_value: currencyNormalizedValue,
       });
 
       const unfillable =
@@ -1425,22 +1416,28 @@ export const handleTokenList = async (
   }
 };
 
-const getCollection = async (orderParams: PartialOrderComponents) => {
-  let collectionResult;
-
+const getCollection = async (
+  orderParams: PartialOrderComponents
+): Promise<{
+  id: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  new_royalties: any;
+  token_set_id: string | null;
+} | null> => {
   if (orderParams.kind === "single-token") {
-    collectionResult = await redb.oneOrNone(
+    return redb.oneOrNone(
       `
-            SELECT
-              collections.id,
-              collections.new_royalties,
-              collections.token_set_id
-            FROM tokens
-            JOIN collections ON tokens.collection_id = collections.id
-            WHERE tokens.contract = $/contract/
-            AND tokens.token_id = $/tokenId/
-            LIMIT 1
-          `,
+        SELECT
+          collections.id,
+          collections.new_royalties,
+          collections.token_set_id
+        FROM tokens
+        JOIN collections
+          ON tokens.collection_id = collections.id
+        WHERE tokens.contract = $/contract/
+          AND tokens.token_id = $/tokenId/
+        LIMIT 1
+      `,
       {
         contract: toBuffer(orderParams.contract),
         tokenId: orderParams.tokenId,
@@ -1448,39 +1445,37 @@ const getCollection = async (orderParams: PartialOrderComponents) => {
     );
   } else {
     if (getNetworkSettings().multiCollectionContracts.includes(orderParams.contract)) {
-      collectionResult = await redb.oneOrNone(
+      return redb.oneOrNone(
         `
-              SELECT
-                collections.id,
-                collections.new_royalties,
-                collections.token_set_id
-              FROM collections
-              WHERE collections.contract = $/contract/
-                AND collections.slug = $/collectionSlug/
-            `,
+          SELECT
+            collections.id,
+            collections.new_royalties,
+            collections.token_set_id
+          FROM collections
+          WHERE collections.contract = $/contract/
+            AND collections.slug = $/collectionSlug/
+        `,
         {
           contract: toBuffer(orderParams.contract),
           collectionSlug: orderParams.collectionSlug,
         }
       );
     } else {
-      collectionResult = await redb.oneOrNone(
+      return redb.oneOrNone(
         `
-              SELECT
-                collections.id,
-                collections.new_royalties,
-                collections.token_set_id
-              FROM collections
-              WHERE collections.id = $/id/
-            `,
+          SELECT
+            collections.id,
+            collections.new_royalties,
+            collections.token_set_id
+          FROM collections
+          WHERE collections.id = $/id/
+        `,
         {
           id: orderParams.contract,
         }
       );
     }
   }
-
-  return collectionResult;
 };
 
 const getCollectionFloorAskValue = async (contract: string, tokenId: number) => {
