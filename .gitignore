@@ -18,3 +18,5 @@ postgres/
 .idea
 .yarnclean
 coverage/
+
+docker-compose.yaml
