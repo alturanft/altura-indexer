@@ -13,7 +13,7 @@ services:
 
   redis:
     image: redis:6.2.2
-    command: sh -c "redis-server --requirepass password"
+    command: sh -c "redis-server --requirepass password  --maxmemory 16384mb --maxmemory-policy allkeys-lru --appendonly yes"
     networks:
       - local
     ports:
