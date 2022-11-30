@@ -111,6 +111,7 @@ export const getExecuteBuyV6Options: RouteOptions = {
     schema: Joi.object({
       steps: Joi.array().items(
         Joi.object({
+          id: Joi.string().required(),
           action: Joi.string().required(),
           description: Joi.string().required(),
           kind: Joi.string().valid("transaction").required(),
@@ -214,7 +215,8 @@ export const getExecuteBuyV6Options: RouteOptions = {
               kind: order.kind,
               currency: order.currency,
               rawData: order.rawData,
-              fees,
+              // TODO: Add support ERC20 fees
+              fees: payload.currency === Sdk.Common.Addresses.Eth[config.chainId] ? fees : [],
             },
             {
               kind: token.kind,
@@ -537,7 +539,9 @@ export const getExecuteBuyV6Options: RouteOptions = {
         payload.currency,
         {
           source: payload.source,
-          globalFees: feesOnTop,
+          // TODO: Add support ERC20 fees
+          globalFees:
+            payload.currency === Sdk.Common.Addresses.Eth[config.chainId] ? feesOnTop : [],
           partial: payload.partial,
           skipErrors: payload.skipErrors,
           forceRouter: payload.forceRouter,
@@ -552,6 +556,7 @@ export const getExecuteBuyV6Options: RouteOptions = {
 
       // Set up generic filling steps
       const steps: {
+        id: string;
         action: string;
         description: string;
         kind: string;
@@ -561,13 +566,15 @@ export const getExecuteBuyV6Options: RouteOptions = {
         }[];
       }[] = [
         {
+          id: "currency-approval",
           action: "Approve exchange contract",
           description: "A one-time setup transaction to enable trading",
           kind: "transaction",
           items: [],
         },
         {
-          action: "Confirm purchase",
+          id: "sale",
+          action: "Confirm transaction in your wallet",
           description: "To purchase this item you must confirm the transaction and pay the gas fee",
           kind: "transaction",
           items: [],

@@ -27,6 +27,7 @@ import * as royalties from "@/utils/royalties";
 import { Royalty } from "@/utils/royalties";
 import { generateMerkleTree } from "@reservoir0x/sdk/dist/common/helpers/merkle";
 import { TokenSet } from "@/orderbook/token-sets/token-list";
+import * as refreshContractCollectionsMetadata from "@/jobs/collection-updates/refresh-contract-collections-metadata-queue";
 
 export type OrderInfo =
   | {
@@ -643,7 +644,17 @@ export const save = async (
       }
 
       const collection = await getCollection(orderParams);
+
       if (!collection) {
+        if (orderParams.kind === "contract-wide") {
+          logger.warn(
+            "orders-seaport-save-partial",
+            `Unknown Collection. orderId=${id}, contract=${orderParams.contract}, collectionSlug=${orderParams.collectionSlug}`
+          );
+
+          await refreshContractCollectionsMetadata.addToQueue(orderParams.contract);
+        }
+
         return results.push({
           id,
           status: "unknown-collection",
@@ -1478,7 +1489,10 @@ const getCollection = async (
   }
 };
 
-const getCollectionFloorAskValue = async (contract: string, tokenId: number) => {
+const getCollectionFloorAskValue = async (
+  contract: string,
+  tokenId: number
+): Promise<number | undefined> => {
   if (getNetworkSettings().multiCollectionContracts.includes(contract)) {
     const collection = await Collections.getByContractAndTokenId(contract, tokenId);
     return collection?.floorSellValue;
