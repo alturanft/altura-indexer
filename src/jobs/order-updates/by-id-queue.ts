@@ -43,6 +43,10 @@ if (config.doBackgroundWork) {
       const { id, trigger } = job.data as OrderInfo;
       let { side, tokenSetId } = job.data as OrderInfo;
 
+      if (config.chainId === 1) {
+        logger.info(QUEUE_NAME, `OrderUpdatesById: ${JSON.stringify(job.data)}`);
+      }
+
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let order: any;
@@ -123,7 +127,7 @@ if (config.doBackgroundWork) {
             );
 
             if (!buyOrderResult.length && trigger.kind === "revalidation") {
-              // When revalidating, force revalidation of the attribute / collection.
+              // When revalidating, force revalidation of the attribute / collection
               const tokenSetsResult = await redb.manyOrNone(
                 `
                   SELECT
