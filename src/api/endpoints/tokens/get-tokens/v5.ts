@@ -77,6 +77,12 @@ export const getTokensV5Options: RouteOptions = {
       source: Joi.string().description(
         "Domain of the order source. Example `opensea.io` (Only listed tokens are returned when filtering by source)"
       ),
+      minRarityRank: Joi.number()
+        .integer()
+        .description("Get tokens with a min rarity rank (inclusive)"),
+      maxRarityRank: Joi.number()
+        .integer()
+        .description("Get tokens with a max rarity rank (inclusive)"),
       flagStatus: Joi.number()
         .allow(-1, 0, 1)
         .description("-1 = All tokens (default)\n0 = Non flagged tokens\n1 = Flagged tokens"),
@@ -510,6 +516,14 @@ export const getTokensV5Options: RouteOptions = {
         conditions.push(`t.contract = $/contract/`);
       }
 
+      if (query.minRarityRank) {
+        conditions.push(`t.rarity_rank >= $/minRarityRank/`);
+      }
+
+      if (query.maxRarityRank) {
+        conditions.push(`t.rarity_rank <= $/maxRarityRank/`);
+      }
+
       if (query.tokens) {
         if (!_.isArray(query.tokens)) {
           query.tokens = [query.tokens];
@@ -553,7 +567,7 @@ export const getTokensV5Options: RouteOptions = {
 
           switch (query.sortBy) {
             case "rarity": {
-              query.sortDirection = query.sortDirection || "desc"; // Default sorting for rarity is DESC
+              query.sortDirection = query.sortDirection || "asc"; // Default sorting for rarity is ASC
               const sign = query.sortDirection == "desc" ? "<" : ">";
               conditions.push(
                 `(t.rarity_rank, t.token_id) ${sign} ($/contRarity/, $/contTokenId/)`
@@ -614,8 +628,8 @@ export const getTokensV5Options: RouteOptions = {
         switch (query.sortBy) {
           case "rarity": {
             baseQuery += ` ORDER BY t.rarity_rank ${
-              query.sortDirection || "DESC"
-            } NULLS LAST, t.token_id ${query.sortDirection || "DESC"}`;
+              query.sortDirection || "ASC"
+            } NULLS LAST, t.token_id ${query.sortDirection || "ASC"}`;
             break;
           }
 

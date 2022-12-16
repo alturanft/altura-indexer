@@ -104,7 +104,7 @@ export const postTokensRefreshV1Options: RouteOptions = {
         await OpenseaIndexerApi.fastTokenSync(payload.token);
       }
 
-      // Refresh meta data
+      // Refresh metadata
       const collection = await Collections.getByContractAndTokenId(contract, tokenId);
 
       if (!collection) {
@@ -114,12 +114,23 @@ export const postTokensRefreshV1Options: RouteOptions = {
         );
       }
 
+      let method = metadataIndexFetch.getIndexingMethod(collection?.community || null);
+
+      if (contract === "0x11708dc8a3ea69020f520c81250abb191b190110") {
+        method = "simplehash";
+
+        logger.info(
+          `post-tokens-refresh-${version}-handler`,
+          `Forced rtfkt. contract=${contract}, tokenId=${tokenId}, method=${method}`
+        );
+      }
+
       await metadataIndexFetch.addToQueue(
         [
           {
             kind: "single-token",
             data: {
-              method: metadataIndexFetch.getIndexingMethod(collection?.community || null),
+              method,
               contract,
               tokenId,
               collection: collection?.id || contract,
